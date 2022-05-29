@@ -31,6 +31,7 @@
 #define ADC_CHANNEL_INPUT NRF_SAADC_INPUT_AIN1 
 
 #define BUFFER_SIZE 1
+#define VECTOR_SIZE 10
 
 /* Other defines */
 #define TIMER_INTERVAL_MSEC 1000 /* Interval between ADC samples */
@@ -175,7 +176,8 @@ void Input(void *argA , void *argB, void *argC)
     
     /* Thread loop */
     while(1) {
-        
+        printk("\x1b[2J");                                    /* Clear screen */
+        printk("\x1b[H");   // Send cursor to home
         /* Do the workload */
         err=adc_sample();
         if(err) {
@@ -191,7 +193,7 @@ void Input(void *argA , void *argB, void *argC)
         }
         data_1.data = input;
         k_fifo_put(&fifo_1, &data_1);
-        printk("Thread A data in fifo_ab: %d\n",data_1.data);  
+        //printk("Thread A data in fifo_ab: %d\n",data_1.data);  
        
         /* Wait for next release instant */ 
         fin_time = k_uptime_get();
@@ -210,14 +212,53 @@ void Filter(void *argA , void *argB, void *argC)
     int16_t filter_out;
     struct data_item_t *data_1;
     struct data_item_t data_2;
+    static int local_vect[VECTOR_SIZE] = {0,0,0,0,0};
+    static int avg_total;
+    static int avg_rem;
+    int sum;
+    int remaining_samples;
 
-    printk("Thread B init (sporadic, waits on a semaphore by task A)\n");
+    //printk("Thread B init (sporadic, waits on a semaphore by task A)\n");
     while(1) {
         data_1 = k_fifo_get(&fifo_1, K_FOREVER);
-        filter_out= data_1->data +100;
-        data_2.data = filter_out;
+
+        for (int i = 0; i<VECTOR_SIZE-1; i++){ //Local_Vector[] <- Shared memory 1
+          local_vect[i] = local_vect[i+1];
+
+        }
+        local_vect[VECTOR_SIZE-1] = data_1->data;
+
+        sum = 0;
+        avg_total = 0;
+        for (int i = 0; i<VECTOR_SIZE; i++){ // Media com todas as amostras
+          sum = sum + local_vect[i];
+
+        }
+        avg_total = sum/VECTOR_SIZE;
+        printk("AVG_Total %d\n",avg_total);
+
+        sum = 0;
+        remaining_samples = 0;
+        for (int i = 0; i<VECTOR_SIZE; i++){ // Media sem outliars
+          if (local_vect[i] < 1.1*avg_total && local_vect[i] > 0.9*avg_total){
+            sum = sum + local_vect[i];
+
+            remaining_samples++;
+          }
+        }
+        printk("Remaining Samples Consideradas -> %d\n",remaining_samples);
+
+        if (remaining_samples>0){
+          avg_rem = sum/remaining_samples;
+        }
+        else{
+          printk("ALL OUTLIAR\n");
+        }
+        
+        data_2.data=avg_rem;
+
         k_fifo_put(&fifo_2, &data_2);
-        printk("Thread B set fifo bc value to: %d \n",data_2.data);     
+        //printk("Thread B set fifo bc value to: %d \n",data_2.data);     
   }
 }
 
@@ -227,11 +268,12 @@ void Output(void *argA , void *argB, void *argC)
     int16_t out;
     struct data_item_t *data_2;
 
-    printk("Thread C init (sporadic, waits on a semaphore by task A)\n");
+    //printk("Thread C init (sporadic, waits on a semaphore by task A)\n");
     while(1) {
         data_2 = k_fifo_get(&fifo_2, K_FOREVER);
         out= data_2->data;         
-        printk("Task C read bc value: %d\n",data_2->data);
+        //printk("Task C read bc value: %d\n",data_2->data);
+        printk("Output: %d\n",data_2->data);
             
   }
 }
