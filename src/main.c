@@ -232,7 +232,6 @@ void Input(void *argA , void *argB, void *argC)
     int16_t input;
     struct data_item_t data_1;
     int err=0;
-    int ret=0;
     
     printk("Thread A init (periodic)\n");
 
@@ -356,6 +355,7 @@ void Output(void *argA , void *argB, void *argC)
     /* Local variables */
     int16_t out;
     struct data_item_t *data_2;
+    int ret=0;
 
     //printk("Thread C init (sporadic, waits on a semaphore by task A)\n");
     while(1) {
