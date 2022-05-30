@@ -1,14 +1,15 @@
-/*
- * Paulo Pedreiras, 2022/02
- * Zephyr: Simple thread creation example (3)
- * 
- * One of the tasks is periodc, the other two synchronzie via a fifo 
- * 
- * Base documentation:
- *      https://developer.nordicsemi.com/nRF_Connect_SDK/doc/latest/zephyr/reference/kernel/index.html
- * 
- */
-
+/** \file main.c
+* \brief Sistema de tempo real utilizando threads/tasks sincronizadas por FIFOs.
+*
+*  Este código permite a leitura do valor em A0, utilizando a ADC.
+*  Faz uma filtragem (Média total, remove outliars, média).  
+*  Utiliza o valor final para ajustar um sinal PWM aplicado ao LED1.
+*  A sincronização é feita através de bloqueio á espera de valor no FIFO.
+*
+* \author Daniel Barra de Almeida        85111
+* \author Marco  Antonio da Silva Santos 83192
+* \date 30/05/2022
+*/
 
 #include <zephyr.h>
 #include <device.h>
@@ -104,7 +105,12 @@ const struct device *pwm0_dev;          /* Pointer to PWM device structure */
 unsigned int pwmPeriod_us = 1000;       /* PWM priod in us */
 unsigned int dcValue = 33;              /* Duty-cycle in % */
 
-/* Takes one sample */
+/** \brief  Amostragem da ADC.
+*  Faz a leitura de uma amostra pela ADC.
+*
+* Esta função faz a leitura de uma amostra do sinal analógico
+* presente na porta A0 da placa.(Valor ente 0 e 1023 V)
+*/
 static int adc_sample(void)
 {
 	int ret;
@@ -128,7 +134,12 @@ static int adc_sample(void)
 	return ret;
 }
 
-
+/** \brief  Configuração.
+*  Configura a interface da placa.
+*
+* Esta função faz as configurações necessárias
+* para a interface da placa ser utilizada adequadamente.
+*/
 void config(void)
 {
 
@@ -168,7 +179,13 @@ void config(void)
    
 }
 
-/* Main function */
+/** \brief  Função principal.
+*  Funcionando com FIFOs
+*
+* Esta é a funcao principal que logo de incio chama a funcção de configuração.
+* São inicializados os FIFOs e criadas as Threads/Tasks para o funcionamento
+* 
+*/
 void main(void)
 {
     
@@ -196,7 +213,16 @@ void main(void)
 
 } 
 
-/* Thread code implementation */
+/** \brief  Thread Input.
+*  Funcionamento de aquisição de informação.
+*
+* Leitura da ADC.
+* Conversão da escala de 0 a 1023 para 0 a 3000 (correspondente de 0 a 3 V).
+* Inserir o valor lido no FIFO1.
+* Esperar pelo fim do periodo de amostragem.
+* Repete.
+* 
+*/
 void Input(void *argA , void *argB, void *argC)
 {
     /* Timing variables to control task periodicity */
@@ -237,11 +263,7 @@ void Input(void *argA , void *argB, void *argC)
         k_fifo_put(&fifo_1, &data_1);
         //printk("Thread A data in fifo_ab: %d\n",data_1.data);  
         
-        printk("PWM DC value set to %u %%\n",dcValue);
-        ret = pwm_pin_set_usec(pwm0_dev, BOARDLED_PIN, pwmPeriod_us,(unsigned int)((pwmPeriod_us*dcValue)/100), PWM_POLARITY_NORMAL);
-        if (ret) {
-          printk("Error %d: failed to set pulse width\n", ret);
-        }
+        
 
         /* Wait for next release instant */ 
         fin_time = k_uptime_get();
@@ -254,6 +276,16 @@ void Input(void *argA , void *argB, void *argC)
 
 }
 
+/** \brief  Thread Filter.
+*  Funcionamento de filtragem da informação.
+*
+* Esperar que haja um valor disponivel no FIFO1.
+* Retirar o valor presente no FIFO1 e adicioná-lo a um vetor local, retirando o mais antigo.
+* Filtragem (Média total, remove outliars, média dos restantes).
+* Inserir resultado num segundo FIFO2.
+* Repete.
+* 
+*/
 void Filter(void *argA , void *argB, void *argC)
 {
     /* Local variables */
@@ -309,6 +341,16 @@ void Filter(void *argA , void *argB, void *argC)
   }
 }
 
+/** \brief  Thread Output.
+*  Funcionamento de saída da informação.
+*
+* Esperar que haja um valor disponivel no FIFO2.
+* Ler e retirar o valor presente no FIFO2.
+* Mostrar no terminal o valor lido.
+* Ajustar o duty-cycle do PWM aplicado ao LED1.
+* Repete.
+* 
+*/
 void Output(void *argA , void *argB, void *argC)
 {
     /* Local variables */
@@ -322,7 +364,11 @@ void Output(void *argA , void *argB, void *argC)
         //printk("Task C read bc value: %d\n",data_2->data);
         dcValue = (100*out)/3000;
         printk("Output: %d\n",out);
-        
+        printk("PWM DC value set to %u %%\n",dcValue);
+        ret = pwm_pin_set_usec(pwm0_dev, BOARDLED_PIN, pwmPeriod_us,(unsigned int)((pwmPeriod_us*dcValue)/100), PWM_POLARITY_NORMAL);
+        if (ret) {
+          printk("Error %d: failed to set pulse width\n", ret);
+        }
             
   }
 }
