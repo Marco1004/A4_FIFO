@@ -12,15 +12,19 @@
 
 #include <zephyr.h>
 #include <device.h>
+#include <devicetree.h>
 #include <drivers/gpio.h>
 #include <drivers/adc.h>
+#include <drivers/pwm.h>
 #include <sys/printk.h>
 #include <sys/__assert.h>
 #include <string.h>
+#include <stdio.h>
 
 
 /*ADC definitions and includes*/
 #include <hal/nrf_saadc.h>
+
 #define ADC_NID DT_NODELABEL(adc) 
 #define ADC_RESOLUTION 10
 #define ADC_GAIN ADC_GAIN_1_4
@@ -30,11 +34,10 @@
 
 #define ADC_CHANNEL_INPUT NRF_SAADC_INPUT_AIN1 
 
-#define BUFFER_SIZE 1
-#define VECTOR_SIZE 10
-
 /* Other defines */
 #define TIMER_INTERVAL_MSEC 1000 /* Interval between ADC samples */
+#define BUFFER_SIZE 1
+#define VECTOR_SIZE 10            /* Filter Local-Vector Size */
 
 /* Size of stack area used by each thread (can be thread specific, if necessary)*/
 #define STACK_SIZE 1024
@@ -45,7 +48,12 @@
 #define thread_Out_prio 1
 
 /* Thread periodicity (in ms)*/
-#define SAMP_PERIOD_MS 1000
+#define SAMP_PERIOD_MS 1000           //---------------------SAMPLING PERIOD----------------------
+
+/* Refer to dts file */
+#define PWM0_NID DT_NODELABEL(pwm0) 
+#define GPIO0_NID DT_NODELABEL(gpio0) 
+#define BOARDLED_PIN 0xD /* Pin at which LED is connected. Addressing is direct (i.e., pin number) */
 
 /* Create thread stack space */
 K_THREAD_STACK_DEFINE(thread_In_stack, STACK_SIZE);
@@ -62,6 +70,11 @@ k_tid_t thread_In_tid;
 k_tid_t thread_Filter_tid;
 k_tid_t thread_Out_tid;
 
+/* Thread code prototypes */
+void Input(void *argA , void *argB, void *argC);
+void Filter(void *argA , void *argB, void *argC);
+void Output(void *argA , void *argB, void *argC);
+
 /* Create fifos*/
 struct k_fifo fifo_1;
 struct k_fifo fifo_2;
@@ -71,11 +84,6 @@ struct data_item_t {
     void *fifo_reserved;    /* 1st word reserved for use by FIFO */
     uint16_t data;          /* Actual data */
 };
-
-/* Thread code prototypes */
-void Input(void *argA , void *argB, void *argC);
-void Filter(void *argA , void *argB, void *argC);
-void Output(void *argA , void *argB, void *argC);
 
 /* ADC channel configuration */
 static const struct adc_channel_cfg my_channel_cfg = {
@@ -90,6 +98,13 @@ struct k_timer my_timer;
 const struct device *adc_dev = NULL;
 static uint16_t adc_sample_buffer[BUFFER_SIZE];
 
+/* PWM configuration */
+const struct device *gpio0_dev;         /* Pointer to GPIO device structure */
+const struct device *pwm0_dev;          /* Pointer to PWM device structure */
+unsigned int pwmPeriod_us = 1000;       /* PWM priod in us */
+unsigned int dcValue = 33;              /* Duty-cycle in % */
+
+/* Takes one sample */
 static int adc_sample(void)
 {
 	int ret;
@@ -113,8 +128,27 @@ static int adc_sample(void)
 	return ret;
 }
 
-void config(void){
-    int err=0;
+
+void config(void)
+{
+
+    int err=0;                              /* Error value variable */
+
+    /* Bind to GPIO 0 */
+    gpio0_dev = device_get_binding(DT_LABEL(GPIO0_NID));
+    if (gpio0_dev == NULL) {
+        printk("Failed to bind to GPIO0\n\r");        
+        return;
+    }
+    /* Bind PWM0 */
+    pwm0_dev = device_get_binding(DT_LABEL(PWM0_NID));
+    if (pwm0_dev == NULL) {
+	printk("Error: Failed to bind to PWM0\n\r");
+	return;
+    }
+    else  {
+        printk("Bind to PWM0 successful\n\r");            
+    }
 
     /* ADC setup: bind and initialize */
     adc_dev = device_get_binding(DT_LABEL(ADC_NID));
@@ -128,12 +162,16 @@ void config(void){
     
     /* It is recommended to calibrate the SAADC at least once before use, and whenever the ambient temperature has changed by more than 10 ?C */
     NRF_SAADC->TASKS_CALIBRATEOFFSET = 1;
+    
+   
+
    
 }
 
 /* Main function */
-void main(void) {
-
+void main(void)
+{
+    
     config();
     
     /* Create/Init fifos */
@@ -168,6 +206,7 @@ void Input(void *argA , void *argB, void *argC)
     int16_t input;
     struct data_item_t data_1;
     int err=0;
+    int ret=0;
     
     printk("Thread A init (periodic)\n");
 
@@ -176,8 +215,9 @@ void Input(void *argA , void *argB, void *argC)
     
     /* Thread loop */
     while(1) {
-        printk("\x1b[2J");                                    /* Clear screen */
+        printk("\x1b[2J");  /* Clear screen */
         printk("\x1b[H");   // Send cursor to home
+
         /* Do the workload */
         err=adc_sample();
         if(err) {
@@ -186,15 +226,23 @@ void Input(void *argA , void *argB, void *argC)
         else {
             if(adc_sample_buffer[0] > 1023) {
                 printk("adc reading out of range\n\r");
+            
             }
             else {
                 input= (uint16_t)(1000*adc_sample_buffer[0]*((float)3/1023));
             }
         }
+
         data_1.data = input;
         k_fifo_put(&fifo_1, &data_1);
         //printk("Thread A data in fifo_ab: %d\n",data_1.data);  
-       
+        
+        printk("PWM DC value set to %u %%\n",dcValue);
+        ret = pwm_pin_set_usec(pwm0_dev, BOARDLED_PIN, pwmPeriod_us,(unsigned int)((pwmPeriod_us*dcValue)/100), PWM_POLARITY_NORMAL);
+        if (ret) {
+          printk("Error %d: failed to set pulse width\n", ret);
+        }
+
         /* Wait for next release instant */ 
         fin_time = k_uptime_get();
         if( fin_time < release_time) {
@@ -209,7 +257,6 @@ void Input(void *argA , void *argB, void *argC)
 void Filter(void *argA , void *argB, void *argC)
 {
     /* Local variables */
-    int16_t filter_out;
     struct data_item_t *data_1;
     struct data_item_t data_2;
     static int local_vect[VECTOR_SIZE] = {0,0,0,0,0};
@@ -273,7 +320,9 @@ void Output(void *argA , void *argB, void *argC)
         data_2 = k_fifo_get(&fifo_2, K_FOREVER);
         out= data_2->data;         
         //printk("Task C read bc value: %d\n",data_2->data);
-        printk("Output: %d\n",data_2->data);
+        dcValue = (100*out)/3000;
+        printk("Output: %d\n",out);
+        
             
   }
 }
