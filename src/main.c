@@ -36,7 +36,6 @@
 #define ADC_CHANNEL_INPUT NRF_SAADC_INPUT_AIN1 
 
 /* Other defines */
-#define TIMER_INTERVAL_MSEC 1000 /* Interval between ADC samples */
 #define BUFFER_SIZE 1
 #define VECTOR_SIZE 10            /* Filter Local-Vector Size */
 
@@ -255,6 +254,7 @@ void Input(void *argA , void *argB, void *argC)
             }
             else {
                 input= (uint16_t)(1000*adc_sample_buffer[0]*((float)3/1023));
+                printk("Actual Sample: %d\n", input);
             }
         }
 
